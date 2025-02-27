@@ -5,7 +5,6 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.utils.executor import start_webhook
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 
 # Bot configuration
@@ -15,28 +14,24 @@ WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = int(os.getenv("PORT", 8080))
 
-# Initialize bot and dispatcher
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# MongoDB configuration:
-# Here we explicitly set the correct connection string.
-# Note: Ensure that the host in your URI is exactly as provided by MongoDB Atlas.
+# MongoDB configuration (explicit connection string with default database "koyebbot")
 MONGODB_URI = "mongodb+srv://nehal969797:nehalsingh969797@cluster0.7ccmpy4.mongodb.net/koyebbot?retryWrites=true&w=majority&appName=Cluster0"
 mongo_client = AsyncIOMotorClient(MONGODB_URI)
-db = mongo_client.get_default_database()  # This returns the "koyebbot" database.
+db = mongo_client.get_default_database()
 accounts_collection = db["accounts"]
 
-# Utility function: Retrieve an account document by its ObjectId (as a string)
 async def get_account_by_id(account_id: str):
     from bson import ObjectId
     try:
         account = await accounts_collection.find_one({"_id": ObjectId(account_id)})
         return account
-    except Exception:
+    except Exception as e:
+        logging.error("Error retrieving account: %s", e)
         return None
 
-# Show start message and list all accounts (if any)
 async def show_start(chat_id):
     accounts_cursor = accounts_collection.find({})
     accounts = await accounts_cursor.to_list(length=100)
@@ -58,7 +53,6 @@ async def show_start(chat_id):
 async def cmd_start(message: types.Message):
     await show_start(message.chat.id)
 
-# Callback to add a new account
 @dp.callback_query_handler(lambda c: c.data == "add_account")
 async def process_add_account(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
@@ -66,7 +60,6 @@ async def process_add_account(callback_query: types.CallbackQuery):
             "AddAccount: <account_name> <koyeb_api_key>")
     await bot.send_message(callback_query.from_user.id, text)
 
-# Handle adding account message (format: AddAccount: <account_name> <koyeb_api_key>)
 @dp.message_handler(lambda message: message.text and message.text.startswith("AddAccount:"))
 async def handle_add_account(message: types.Message):
     try:
@@ -88,7 +81,6 @@ async def handle_add_account(message: types.Message):
         await message.reply("Failed to add account.")
     await show_start(message.chat.id)
 
-# When user selects an account from the list
 @dp.callback_query_handler(lambda c: c.data.startswith("account_"))
 async def account_menu(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -111,25 +103,41 @@ async def account_menu(callback_query: types.CallbackQuery):
     await bot.send_message(callback_query.from_user.id, text, reply_markup=keyboard)
     await bot.answer_callback_query(callback_query.id)
 
-# Go back to account list
 @dp.callback_query_handler(lambda c: c.data == "back_accounts")
 async def back_to_accounts(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await show_start(callback_query.from_user.id)
 
-# Utility: Retrieve the free app for an account using its API key
+# Helper function to fetch the free app using a 30-second timeout
 async def get_free_app(api_key: str):
-    async with aiohttp.ClientSession() as session:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        async with session.get("https://app.koyeb.com/api/v1/apps", headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                apps = data.get("apps", [])
-                if apps:
-                    return apps[0]  # Assumes the free app is the first one
-    return None
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json"
+        }
+        try:
+            async with session.get("https://app.koyeb.com/api/v1/apps", headers=headers) as resp:
+                if resp.status == 200:
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as json_err:
+                        logging.error("Failed to decode JSON from Koyeb API: %s", json_err)
+                        return None
+                    apps = data.get("apps", [])
+                    if apps:
+                        return apps[0]
+                    else:
+                        logging.error("No apps found in response: %s", data)
+                        return None
+                else:
+                    text = await resp.text()
+                    logging.error("Koyeb API returned status %s: %s", resp.status, text)
+                    return None
+        except Exception as e:
+            logging.error("Error fetching free app: %s", e)
+            return None
 
-# Redeploy the app
 @dp.callback_query_handler(lambda c: c.data.startswith("redeploy_"))
 async def redeploy_app(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -139,20 +147,24 @@ async def redeploy_app(callback_query: types.CallbackQuery):
         return
     free_app = await get_free_app(account.get("api_key"))
     if not free_app:
-        await bot.send_message(callback_query.from_user.id, "No app found for this account.")
+        await bot.send_message(callback_query.from_user.id, "No app found or error fetching app info.")
         return
     app_id = free_app.get("id")
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {"Authorization": f"Bearer {account.get('api_key')}"}
-        async with session.post(f"https://app.koyeb.com/api/v1/apps/{app_id}/redeploy", headers=headers) as resp:
-            if resp.status in (200, 201):
-                text = f"App '{free_app.get('name')}' redeployed successfully."
-            else:
-                text = f"Failed to redeploy app. Status: {resp.status}"
+        try:
+            async with session.post(f"https://app.koyeb.com/api/v1/apps/{app_id}/redeploy", headers=headers) as resp:
+                if resp.status in (200, 201):
+                    text = f"App '{free_app.get('name')}' redeployed successfully."
+                else:
+                    text = f"Failed to redeploy app. Status: {resp.status}"
+        except Exception as e:
+            logging.error("Error redeploying app: %s", e)
+            text = "Error redeploying app."
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
 
-# See logs for the app
 @dp.callback_query_handler(lambda c: c.data.startswith("logs_"))
 async def see_logs(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -162,22 +174,29 @@ async def see_logs(callback_query: types.CallbackQuery):
         return
     free_app = await get_free_app(account.get("api_key"))
     if not free_app:
-        await bot.send_message(callback_query.from_user.id, "No app found for this account.")
+        await bot.send_message(callback_query.from_user.id, "No app found or error fetching app info.")
         return
     app_id = free_app.get("id")
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {"Authorization": f"Bearer {account.get('api_key')}"}
-        async with session.get(f"https://app.koyeb.com/api/v1/apps/{app_id}/logs", headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                logs = data.get("logs", [])
-                text = "Recent Logs:\n" + "\n".join(logs[-10:]) if logs else "No logs available."
-            else:
-                text = f"Failed to retrieve logs. Status: {resp.status}"
+        try:
+            async with session.get(f"https://app.koyeb.com/api/v1/apps/{app_id}/logs", headers=headers) as resp:
+                if resp.status == 200:
+                    try:
+                        data = await resp.json(content_type=None)
+                        logs = data.get("logs", [])
+                        text = "Recent Logs:\n" + "\n".join(logs[-10:]) if logs else "No logs available."
+                    except Exception as json_err:
+                        text = f"Error decoding logs JSON: {json_err}"
+                else:
+                    text = f"Failed to retrieve logs. Status: {resp.status}"
+        except Exception as e:
+            logging.error("Error fetching logs: %s", e)
+            text = "Error fetching logs."
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
 
-# Stop the app
 @dp.callback_query_handler(lambda c: c.data.startswith("stop_"))
 async def stop_app(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -187,20 +206,24 @@ async def stop_app(callback_query: types.CallbackQuery):
         return
     free_app = await get_free_app(account.get("api_key"))
     if not free_app:
-        await bot.send_message(callback_query.from_user.id, "No app found for this account.")
+        await bot.send_message(callback_query.from_user.id, "No app found or error fetching app info.")
         return
     app_id = free_app.get("id")
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {"Authorization": f"Bearer {account.get('api_key')}"}
-        async with session.post(f"https://app.koyeb.com/api/v1/apps/{app_id}/stop", headers=headers) as resp:
-            if resp.status == 200:
-                text = f"App '{free_app.get('name')}' stopped successfully."
-            else:
-                text = f"Failed to stop app. Status: {resp.status}"
+        try:
+            async with session.post(f"https://app.koyeb.com/api/v1/apps/{app_id}/stop", headers=headers) as resp:
+                if resp.status == 200:
+                    text = f"App '{free_app.get('name')}' stopped successfully."
+                else:
+                    text = f"Failed to stop app. Status: {resp.status}"
+        except Exception as e:
+            logging.error("Error stopping app: %s", e)
+            text = "Error stopping app."
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
 
-# Resume the app
 @dp.callback_query_handler(lambda c: c.data.startswith("resume_"))
 async def resume_app(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -210,20 +233,24 @@ async def resume_app(callback_query: types.CallbackQuery):
         return
     free_app = await get_free_app(account.get("api_key"))
     if not free_app:
-        await bot.send_message(callback_query.from_user.id, "No app found for this account.")
+        await bot.send_message(callback_query.from_user.id, "No app found or error fetching app info.")
         return
     app_id = free_app.get("id")
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {"Authorization": f"Bearer {account.get('api_key')}"}
-        async with session.post(f"https://app.koyeb.com/api/v1/apps/{app_id}/resume", headers=headers) as resp:
-            if resp.status == 200:
-                text = f"App '{free_app.get('name')}' resumed successfully."
-            else:
-                text = f"Failed to resume app. Status: {resp.status}"
+        try:
+            async with session.post(f"https://app.koyeb.com/api/v1/apps/{app_id}/resume", headers=headers) as resp:
+                if resp.status == 200:
+                    text = f"App '{free_app.get('name')}' resumed successfully."
+                else:
+                    text = f"Failed to resume app. Status: {resp.status}"
+        except Exception as e:
+            logging.error("Error resuming app: %s", e)
+            text = "Error resuming app."
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
 
-# View Environment Variables
 @dp.callback_query_handler(lambda c: c.data.startswith("env_"))
 async def see_env(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -233,22 +260,29 @@ async def see_env(callback_query: types.CallbackQuery):
         return
     free_app = await get_free_app(account.get("api_key"))
     if not free_app:
-        await bot.send_message(callback_query.from_user.id, "No app found for this account.")
+        await bot.send_message(callback_query.from_user.id, "No app found or error fetching app info.")
         return
     app_id = free_app.get("id")
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {"Authorization": f"Bearer {account.get('api_key')}"}
-        async with session.get(f"https://app.koyeb.com/api/v1/apps/{app_id}/env", headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                env_vars = data.get("env", {})
-                text = "Environment Variables:\n" + "\n".join([f"{k}: {v}" for k, v in env_vars.items()]) if env_vars else "No environment variables found."
-            else:
-                text = f"Failed to retrieve environment variables. Status: {resp.status}"
+        try:
+            async with session.get(f"https://app.koyeb.com/api/v1/apps/{app_id}/env", headers=headers) as resp:
+                if resp.status == 200:
+                    try:
+                        data = await resp.json(content_type=None)
+                        env_vars = data.get("env", {})
+                        text = "Environment Variables:\n" + "\n".join([f"{k}: {v}" for k, v in env_vars.items()]) if env_vars else "No environment variables found."
+                    except Exception as json_err:
+                        text = f"Error decoding env JSON: {json_err}"
+                else:
+                    text = f"Failed to retrieve environment variables. Status: {resp.status}"
+        except Exception as e:
+            logging.error("Error fetching environment variables: %s", e)
+            text = "Error fetching environment variables."
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
 
-# Prompt to change environment variables
 @dp.callback_query_handler(lambda c: c.data.startswith("changeenv_"))
 async def prompt_change_env(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -256,7 +290,6 @@ async def prompt_change_env(callback_query: types.CallbackQuery):
                            f"Please send the new environment variable in the format:\nChangeEnv: {account_id} <key> <value>")
     await bot.answer_callback_query(callback_query.id)
 
-# Handle environment variable change command (format: ChangeEnv: <account_id> <key> <value>)
 @dp.message_handler(lambda message: message.text and message.text.startswith("ChangeEnv:"))
 async def handle_change_env(message: types.Message):
     try:
@@ -276,20 +309,24 @@ async def handle_change_env(message: types.Message):
         return
     free_app = await get_free_app(account.get("api_key"))
     if not free_app:
-        await message.reply("No app found for this account.")
+        await message.reply("No app found or error fetching app info.")
         return
     app_id = free_app.get("id")
     payload = {"env": {key: value}}
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {"Authorization": f"Bearer {account.get('api_key')}", "Content-Type": "application/json"}
-        async with session.patch(f"https://app.koyeb.com/api/v1/apps/{app_id}/env", headers=headers, json=payload) as resp:
-            if resp.status == 200:
-                text = f"Environment variable '{key}' updated successfully."
-            else:
-                text = f"Failed to update environment variable. Status: {resp.status}"
+        try:
+            async with session.patch(f"https://app.koyeb.com/api/v1/apps/{app_id}/env", headers=headers, json=payload) as resp:
+                if resp.status == 200:
+                    text = f"Environment variable '{key}' updated successfully."
+                else:
+                    text = f"Failed to update environment variable. Status: {resp.status}"
+        except Exception as e:
+            logging.error("Error updating environment variable: %s", e)
+            text = "Error updating environment variable."
     await message.reply(text)
 
-# Delete an account from the database
 @dp.callback_query_handler(lambda c: c.data.startswith("delete_"))
 async def delete_account(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -300,7 +337,6 @@ async def delete_account(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await show_start(callback_query.from_user.id)
 
-# Webhook startup and shutdown handlers
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook set to {WEBHOOK_URL}")
