@@ -8,24 +8,29 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # e.g. https://your-app.koyeb.app
-PORT = int(os.getenv("PORT", 8080))
+# Set your bot token and webhook host (provided by you)
+BOT_TOKEN = "6586633230:AAEVOfh-pBOsnZULNRDSBDssZ_ocOHFg7HU"
+WEBHOOK_HOST = "https://purplestreambot-mrblackgod.koyeb.app"  # Your Koyeb domain
+
+# Define the webhook path; here we append the bot token for uniqueness/security.
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+# Use port from environment variable or default to 8080
+PORT = int(os.getenv("PORT", 8080))
 
 # Initialize bot and dispatcher
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# Replace the MONGODB_URI with your full connection string including the database name.
-MONGO_URI = "mongodb+srv://nehal969797:nehalsingh969797@cluster0.7ccmpy4.mongodb.net/koyebbot?retryWrites=true&w=majority&appName=Cluster0"
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client.get_default_database()  # This now returns the "koyebbot" database.
+# MongoDB configuration
+# Ensure your connection string includes a default database name (here: 'koyebbot')
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://nehal969797:nehalsingh969797@cluster0.7ccmpy4.mongodb.net/koyebbot?retryWrites=true&w=majority")
+mongo_client = AsyncIOMotorClient(MONGODB_URI)
+db = mongo_client.get_default_database()
 accounts_collection = db["accounts"]
 
-# Utility: Retrieve an account document by its ObjectId (as a string)
+# Utility function: Retrieve account document by its ObjectId (as a string)
 async def get_account_by_id(account_id: str):
     from bson import ObjectId
     try:
@@ -34,7 +39,7 @@ async def get_account_by_id(account_id: str):
     except Exception:
         return None
 
-# Display the start message and list all accounts (if any)
+# Show start message and list all accounts (if any)
 async def show_start(chat_id):
     accounts_cursor = accounts_collection.find({})
     accounts = await accounts_cursor.to_list(length=100)
@@ -56,9 +61,7 @@ async def show_start(chat_id):
 async def cmd_start(message: types.Message):
     await show_start(message.chat.id)
 
-# -------------------- Account Management --------------------
-
-# When user clicks "Add Account" button
+# Callback to add a new account
 @dp.callback_query_handler(lambda c: c.data == "add_account")
 async def process_add_account(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
@@ -66,7 +69,7 @@ async def process_add_account(callback_query: types.CallbackQuery):
             "AddAccount: <account_name> <koyeb_api_key>")
     await bot.send_message(callback_query.from_user.id, text)
 
-# Handle message to add an account (format: AddAccount: <account_name> <koyeb_api_key>)
+# Handle adding account message (format: AddAccount: <account_name> <koyeb_api_key>)
 @dp.message_handler(lambda message: message.text and message.text.startswith("AddAccount:"))
 async def handle_add_account(message: types.Message):
     try:
@@ -111,13 +114,11 @@ async def account_menu(callback_query: types.CallbackQuery):
     await bot.send_message(callback_query.from_user.id, text, reply_markup=keyboard)
     await bot.answer_callback_query(callback_query.id)
 
-# Go back to accounts list
+# Go back to account list
 @dp.callback_query_handler(lambda c: c.data == "back_accounts")
 async def back_to_accounts(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await show_start(callback_query.from_user.id)
-
-# -------------------- Koyeb App Operations --------------------
 
 # Utility: Retrieve the free app for an account using its API key
 async def get_free_app(api_key: str):
@@ -244,25 +245,21 @@ async def see_env(callback_query: types.CallbackQuery):
             if resp.status == 200:
                 data = await resp.json()
                 env_vars = data.get("env", {})
-                if env_vars:
-                    text = "Environment Variables:\n" + "\n".join([f"{k}: {v}" for k, v in env_vars.items()])
-                else:
-                    text = "No environment variables found."
+                text = "Environment Variables:\n" + "\n".join([f"{k}: {v}" for k, v in env_vars.items()]) if env_vars else "No environment variables found."
             else:
                 text = f"Failed to retrieve environment variables. Status: {resp.status}"
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
 
-# Prompt to change environment variables.
+# Prompt to change environment variables
 @dp.callback_query_handler(lambda c: c.data.startswith("changeenv_"))
 async def prompt_change_env(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
     await bot.send_message(callback_query.from_user.id,
-                           f"Please send the new environment variable in the format:\n"
-                           f"ChangeEnv: {account_id} <key> <value>")
+                           f"Please send the new environment variable in the format:\nChangeEnv: {account_id} <key> <value>")
     await bot.answer_callback_query(callback_query.id)
 
-# Handle message to change an environment variable (format: ChangeEnv: <account_id> <key> <value>)
+# Handle environment variable change command (format: ChangeEnv: <account_id> <key> <value>)
 @dp.message_handler(lambda message: message.text and message.text.startswith("ChangeEnv:"))
 async def handle_change_env(message: types.Message):
     try:
@@ -301,18 +298,15 @@ async def delete_account(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
     from bson import ObjectId
     result = await accounts_collection.delete_one({"_id": ObjectId(account_id)})
-    if result.deleted_count:
-        text = "Account deleted successfully."
-    else:
-        text = "Failed to delete account."
+    text = "Account deleted successfully." if result.deleted_count else "Failed to delete account."
     await bot.send_message(callback_query.from_user.id, text)
     await bot.answer_callback_query(callback_query.id)
     await show_start(callback_query.from_user.id)
 
-# -------------------- Webhook Setup --------------------
-
+# Webhook startup and shutdown handlers
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook set to {WEBHOOK_URL}")
 
 async def on_shutdown(dp):
     logging.warning("Shutting down..")
