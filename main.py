@@ -8,29 +8,26 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Set your bot token and webhook host (provided by you)
+# Bot configuration
 BOT_TOKEN = "6586633230:AAEVOfh-pBOsnZULNRDSBDssZ_ocOHFg7HU"
 WEBHOOK_HOST = "https://purplestreambot-mrblackgod.koyeb.app"  # Your Koyeb domain
-
-# Define the webhook path; here we append the bot token for uniqueness/security.
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-
-# Use port from environment variable or default to 8080
 PORT = int(os.getenv("PORT", 8080))
 
 # Initialize bot and dispatcher
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# MongoDB configuration
-# Ensure your connection string includes a default database name (here: 'koyebbot')
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://nehal969797:nehalsingh969797@cluster0.7ccmpy4.mongodb.net/koyebbot?retryWrites=true&w=majority")
+# MongoDB configuration:
+# Here we explicitly set the correct connection string.
+# Note: Ensure that the host in your URI is exactly as provided by MongoDB Atlas.
+MONGODB_URI = "mongodb+srv://nehal969797:nehalsingh969797@cluster0.7ccmpy4.mongodb.net/koyebbot?retryWrites=true&w=majority&appName=Cluster0"
 mongo_client = AsyncIOMotorClient(MONGODB_URI)
-db = mongo_client.get_default_database()
+db = mongo_client.get_default_database()  # This returns the "koyebbot" database.
 accounts_collection = db["accounts"]
 
-# Utility function: Retrieve account document by its ObjectId (as a string)
+# Utility function: Retrieve an account document by its ObjectId (as a string)
 async def get_account_by_id(account_id: str):
     from bson import ObjectId
     try:
