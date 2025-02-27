@@ -19,10 +19,10 @@ WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# Connect to MongoDB
-MONGO_URI = os.getenv("MONGODB_URI")
+# Replace the MONGODB_URI with your full connection string including the database name.
+MONGO_URI = "mongodb+srv://nehal969797:nehalsingh969797@cluster0.7ccmpy4.mongodb.net/koyebbot?retryWrites=true&w=majority&appName=Cluster0"
 mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client.get_default_database()  # or specify your database name
+db = mongo_client.get_default_database()  # This now returns the "koyebbot" database.
 accounts_collection = db["accounts"]
 
 # Utility: Retrieve an account document by its ObjectId (as a string)
