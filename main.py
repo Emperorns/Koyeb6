@@ -23,6 +23,7 @@ mongo_client = AsyncIOMotorClient(MONGODB_URI)
 db = mongo_client.get_default_database()
 accounts_collection = db["accounts"]
 
+# Utility: Retrieve an account document by its ObjectId (as a string)
 async def get_account_by_id(account_id: str):
     from bson import ObjectId
     try:
@@ -32,6 +33,7 @@ async def get_account_by_id(account_id: str):
         logging.error("Error retrieving account: %s", e)
         return None
 
+# Show start message and list all accounts (if any)
 async def show_start(chat_id):
     accounts_cursor = accounts_collection.find({})
     accounts = await accounts_cursor.to_list(length=100)
@@ -42,10 +44,15 @@ async def show_start(chat_id):
         keyboard.add(types.InlineKeyboardButton("Add Account", callback_data="add_account"))
         await bot.send_message(chat_id, text, reply_markup=keyboard)
     else:
-        text = "Welcome to Advanced Koyeb Manager Bot.\nSelect an account to manage:"
+        text = "Welcome to Advanced Koyeb Manager Bot.\nSelect an account to manage:\n"
+        for acc in accounts:
+            # Display both service_id and account name
+            text += f"Service ID: {acc.get('service_id')} | Name: {acc.get('name')}\n"
         keyboard = types.InlineKeyboardMarkup(row_width=2)
         for acc in accounts:
-            keyboard.add(types.InlineKeyboardButton(acc.get("name", "Unnamed"), callback_data=f"account_{str(acc['_id'])}"))
+            # Use the MongoDB _id as the identifier for callbacks
+            keyboard.add(types.InlineKeyboardButton(f"{acc.get('service_id')} - {acc.get('name')}",
+                                                    callback_data=f"account_{str(acc['_id'])}"))
         keyboard.add(types.InlineKeyboardButton("Add Account", callback_data="add_account"))
         await bot.send_message(chat_id, text, reply_markup=keyboard)
 
@@ -53,34 +60,41 @@ async def show_start(chat_id):
 async def cmd_start(message: types.Message):
     await show_start(message.chat.id)
 
+# Callback to add a new account
 @dp.callback_query_handler(lambda c: c.data == "add_account")
 async def process_add_account(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     text = ("Please add your Koyeb account info in the following format:\n\n"
-            "AddAccount: <account_name> <koyeb_api_key>")
+            "AddAccount: <service_id> <account_name> <koyeb_api_key>\n\n"
+            "Example:\n"
+            "AddAccount: myService1 MyKoyebAccount ABCDEFGHIJKLMNOP")
     await bot.send_message(callback_query.from_user.id, text)
 
+# Handle adding account message (format: AddAccount: <service_id> <account_name> <koyeb_api_key>)
 @dp.message_handler(lambda message: message.text and message.text.startswith("AddAccount:"))
 async def handle_add_account(message: types.Message):
     try:
+        # Split into three parts after the colon
         _, details = message.text.split(":", 1)
-        parts = details.strip().split(" ", 1)
-        if len(parts) < 2:
+        parts = details.strip().split(" ", 2)
+        if len(parts) < 3:
             raise ValueError("Insufficient data")
-        account_name = parts[0].strip()
-        koyeb_api = parts[1].strip()
+        service_id = parts[0].strip()
+        account_name = parts[1].strip()
+        koyeb_api = parts[2].strip()
     except Exception:
-        await message.reply("Invalid format. Use: AddAccount: <account_name> <koyeb_api_key>")
+        await message.reply("Invalid format. Use: AddAccount: <service_id> <account_name> <koyeb_api_key>")
         return
 
-    account_data = {"name": account_name, "api_key": koyeb_api}
+    account_data = {"service_id": service_id, "name": account_name, "api_key": koyeb_api}
     result = await accounts_collection.insert_one(account_data)
     if result.inserted_id:
-        await message.reply(f"Account '{account_name}' added successfully!")
+        await message.reply(f"Account '{account_name}' with Service ID '{service_id}' added successfully!")
     else:
         await message.reply("Failed to add account.")
     await show_start(message.chat.id)
 
+# When user selects an account from the list
 @dp.callback_query_handler(lambda c: c.data.startswith("account_"))
 async def account_menu(callback_query: types.CallbackQuery):
     account_id = callback_query.data.split("_", 1)[1]
@@ -88,7 +102,8 @@ async def account_menu(callback_query: types.CallbackQuery):
     if not account:
         await bot.answer_callback_query(callback_query.id, "Account not found.")
         return
-    text = f"Managing account: {account.get('name')}\nSelect an action:"
+    text = (f"Managing account:\nService ID: {account.get('service_id')}\n"
+            f"Name: {account.get('name')}\nSelect an action:")
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         types.InlineKeyboardButton("Redeploy", callback_data=f"redeploy_{account_id}"),
